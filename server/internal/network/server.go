@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -18,8 +19,25 @@ import (
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true
+		return isOriginAllowed(r.Header.Get("Origin"), os.Getenv("ALLOWED_ORIGINS"))
 	},
+}
+
+func isOriginAllowed(origin, configuredOrigins string) bool {
+	origin = strings.TrimRight(strings.TrimSpace(origin), "/")
+	if origin == "" {
+		return false
+	}
+
+	if strings.TrimSpace(configuredOrigins) == "" {
+		configuredOrigins = "http://localhost:5173,http://127.0.0.1:5173"
+	}
+	for _, allowed := range strings.Split(configuredOrigins, ",") {
+		if strings.TrimRight(strings.TrimSpace(allowed), "/") == origin {
+			return true
+		}
+	}
+	return false
 }
 
 func HandleWebSocket(w http.ResponseWriter, r *http.Request) {

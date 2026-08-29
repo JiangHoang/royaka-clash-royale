@@ -3,16 +3,19 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { clearStoredSession } from "../utils/session";
 
 const WebSocketContext = createContext(null);
+const INITIAL_RECONNECT_DELAY_MS = 1000;
+const MAX_RECONNECT_DELAY_MS = 30000;
 
 export function WebSocketProvider({ children }) {
     const socketRef = useRef(null);
     const listeners = useRef(new Set());
     const pendingMessages = useRef([]);
     const reconnectTimeout = useRef(null);
+    const reconnectAttempt = useRef(0);
     const disposed = useRef(false);
     const [isConnected, setIsConnected] = useState(false);
     const [isAuthenticated, setIsAuthenticated] = useState(false);
-    const wsURL = import.meta.env.VITE_WS_URL || "ws://localhost:8080/ws";
+    const wsURL = import.meta.env.VITE_WS_URL;
 
     const sendMessage = useCallback((message) => {
         if (socketRef.current?.readyState !== WebSocket.OPEN) {
@@ -24,9 +27,13 @@ export function WebSocketProvider({ children }) {
     }, []);
 
     const connect = useCallback(() => {
+        if (socketRef.current?.readyState === WebSocket.OPEN ||
+            socketRef.current?.readyState === WebSocket.CONNECTING) return;
+
         const socket = new WebSocket(wsURL);
         socketRef.current = socket;
         socket.onopen = () => {
+            reconnectAttempt.current = 0;
             setIsConnected(true);
             const sessionID = localStorage.getItem("session_id");
             if (sessionID) socket.send(JSON.stringify({ type: "authenticate", data: { session_id: sessionID } }));
@@ -48,15 +55,29 @@ export function WebSocketProvider({ children }) {
             listeners.current.forEach((listener) => listener(message));
         };
         socket.onclose = () => {
+            if (socketRef.current !== socket) return;
+            socketRef.current = null;
             setIsConnected(false); setIsAuthenticated(false);
-            if (!disposed.current) reconnectTimeout.current = window.setTimeout(connect, 3000);
+            if (!disposed.current) {
+                const delay = Math.min(
+                    INITIAL_RECONNECT_DELAY_MS * (2 ** reconnectAttempt.current),
+                    MAX_RECONNECT_DELAY_MS,
+                );
+                reconnectAttempt.current += 1;
+                reconnectTimeout.current = window.setTimeout(connect, delay);
+            }
         };
         socket.onerror = (error) => console.error("[WS] Error", error);
     }, [wsURL]);
 
     useEffect(() => {
         disposed.current = false; connect();
-        return () => { disposed.current = true; window.clearTimeout(reconnectTimeout.current); socketRef.current?.close(); };
+        return () => {
+            disposed.current = true;
+            window.clearTimeout(reconnectTimeout.current);
+            socketRef.current?.close();
+            socketRef.current = null;
+        };
     }, [connect]);
 
     const subscribe = useCallback((listener) => { listeners.current.add(listener); return () => listeners.current.delete(listener); }, []);

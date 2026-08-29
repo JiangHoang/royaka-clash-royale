@@ -21,13 +21,13 @@
 * **Troop Collection** with tanks, healers, and damage dealers
 * **Smart Troop Behavior** (e.g., river crossing only at bridges)
 * **User Authentication** (registration, login, and persistent stats)
-* **File-Based Persistence** (JSON)
+* **Username Authentication backed by Supabase Postgres**
 
 ## Tech Stack
 
 * **Backend**: Go, Gorilla WebSocket, native HTTP server
 * **Frontend**: React, Vite, TailwindCSS
-* **Storage**: JSON files (for users and sessions)
+* **Storage**: Supabase Postgres (profiles, sessions, troops, and towers)
 
 ## Project Structure
 
@@ -59,10 +59,23 @@ git clone https://github.com/trmzaiu/royaka-clash-royale.git
 cd royaka-clash-royale
 ```
 
-### 2. Start the Go Backend
+### 2. Start Supabase
+
+Install Docker and the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started), then run:
+
+```bash
+supabase start
+supabase db reset
+```
+
+The reset applies `supabase/migrations`, then loads development game definitions from `supabase/seed.sql`.
+
+### 3. Configure and Start the Go Backend
 
 ```bash
 cd server
+cp .env.example .env
+# Export the values from .env in your shell.
 go mod tidy
 go run main.go
 ```
@@ -70,7 +83,9 @@ go run main.go
 * WebSocket endpoint: `ws://localhost:8080/ws`
 * Default port: `8080`
 
-### 3. Start the React Frontend
+The server requires `DATABASE_URL` and an RFC3339 `LEGACY_SESSION_CUTOFF`. For hosted App Engine deployments, use Supavisor's IPv4 session-mode connection string and provide secrets through the deployment environment; never commit real values.
+
+### 4. Start the React Frontend
 
 ```bash
 cd client
@@ -98,10 +113,25 @@ npm run dev
 
 ## Authentication System
 
-* Users register and log in via HTTP
-* Passwords hashed using bcrypt
-* Sessions are stored in a `sessions.json` file
-* Match stats (wins/losses) saved per user
+* Username/password requests remain on the WebSocket protocol.
+* Usernames are unique case-insensitively and may contain arbitrary display characters.
+* Passwords are bcrypt hashes in `profiles`; no email address is created or required.
+* Random 30-day session IDs are stored in the `sessions` table.
+* Every protected game message is bound to the authenticated WebSocket identity.
+* Imported JSON sessions remain valid only until `LEGACY_SESSION_CUTOFF`.
+* Match stats and game definitions are read from Supabase Postgres.
+
+## Import Existing JSON Data
+
+Create and link the hosted project and apply migrations. Set `LEGACY_SESSION_CUTOFF` to no more than seven days after the import, then run from `server/`:
+
+```bash
+go run ./cmd/import-json -data-dir ./assets/data
+```
+
+The command requires only `DATABASE_URL` and `LEGACY_SESSION_CUTOFF`. It is idempotent and imports bcrypt hashes without printing credentials. Validate staging first, then run it once against production. Do not use `supabase db push --include-seed` for production; apply schema with `supabase db push` and use the importer for the real game definitions.
+
+After the seven-day rollback period, remove the legacy JSON user/session data and revoke the importer secret from the migration environment.
 
 ---
 

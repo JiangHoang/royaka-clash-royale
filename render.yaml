@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: royaka-server
+    runtime: docker
+    plan: free
+    rootDir: server
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: LEGACY_SESSION_CUTOFF
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
