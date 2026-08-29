@@ -1,8 +1,8 @@
 package model
 
 import (
-	"encoding/json"
-	"os"
+	"context"
+	"royaka/internal/database"
 	"sync"
 	"time"
 
@@ -58,23 +58,26 @@ func (t *TowerInstance) IsAlive() bool {
 
 // ---------- Initialization ----------
 
-func LoadTower() map[string]*Tower {
-	file, err := os.Open("assets/data/towers.json")
+func LoadTower() (map[string]*Tower, error) {
+	rows, err := database.Pool().Query(context.Background(), `
+		select type, max_hp, hp, atk, def, crit, exp, range, attack_speed
+		from public.towers order by type
+	`)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	defer file.Close()
-
-	var towers []Tower
-	if err := json.NewDecoder(file).Decode(&towers); err != nil {
-		return nil
-	}
+	defer rows.Close()
 
 	towerMap := make(map[string]*Tower)
-	for _, t := range towers {
+	for rows.Next() {
+		var t Tower
+		if err := rows.Scan(&t.Type, &t.MaxHP, &t.HP, &t.ATK, &t.DEF,
+			&t.CRIT, &t.EXP, &t.Range, &t.AttackSpeed); err != nil {
+			return nil, err
+		}
 		towerMap[t.Type] = &t
 	}
-	return towerMap
+	return towerMap, rows.Err()
 }
 
 // ---------- Tower Creation ----------

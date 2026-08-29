@@ -5,7 +5,7 @@ import App from "./App.jsx";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
-    <BrowserRouter basename={process.env.NODE_ENV === 'production' ? "/royaka-2025-fe" : "/"}>
+    <BrowserRouter basename={import.meta.env.PROD ? "/royaka-2025-fe" : "/"}>
         <App />
     </BrowserRouter>
 );

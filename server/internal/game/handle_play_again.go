@@ -3,6 +3,7 @@ package game
 import (
 	"encoding/json"
 	"log"
+	"royaka/internal/model"
 	"royaka/internal/utils"
 
 	"github.com/gorilla/websocket"
@@ -31,6 +32,11 @@ func HandlePlayAgain(conn *websocket.Conn, data json.RawMessage) {
 			Success: false,
 			Message: roomRequestMessage,
 		})
+		return
+	}
+	player := model.GetPlayerByConn(conn)
+	if player == nil || (room.Player1.User.Username != player.User.Username && room.Player2.User.Username != player.User.Username) {
+		conn.WriteJSON(utils.Response{Type: "play_again_response", Success: false, Message: "Not a member of this room"})
 		return
 	}
 

@@ -2,9 +2,10 @@ import clsx from "clsx";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useWebSocketContext } from "../context/WebSocketContext";
+import { hasStoredSession } from "../utils/session";
 
 export default function GameEnhanced() {
-    const url = process.env.NODE_ENV === 'production' ? "/royaka-2025-fe/" : "/";
+    const url = import.meta.env.PROD ? "/royaka-2025-fe/" : "/";
     const navigate = useNavigate();
     const { sendMessage, subscribe } = useWebSocketContext();
 
@@ -64,7 +65,7 @@ export default function GameEnhanced() {
 
     // === Effect: Initial Setup & WebSocket Subscription ===
     useEffect(() => {
-        if (!localStorage.getItem("session_id")) {
+        if (!hasStoredSession()) {
             showNotification("Session expired. Redirecting to login...");
             navigate("/auth")
             return;

@@ -1,6 +1,9 @@
 runtime: custom
 env: flex
 
+# Deployment automation must inject DATABASE_URL and LEGACY_SESSION_CUTOFF into a deployment-only
+# app.yaml. Real credentials must not be committed to this file.
+
 automatic_scaling:
   min_num_instances: 1
   max_num_instances: 2

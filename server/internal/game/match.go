@@ -50,8 +50,19 @@ func HandleFindMatch(conn *websocket.Conn, data json.RawMessage) {
 	clientsMu.Unlock()
 
 	// Create Player instance and register
-	user, _ := model.FindUserByUsername(req.Username)
-	player := model.NewPlayer(&user, req.Mode)
+	user, err := model.FindUserByUsername(req.Username)
+	if err != nil {
+		clientConn.SafeWrite(utils.Response{Type: "find_match_response", Success: false, Message: "Failed to load player profile"})
+		CleanupUser(username)
+		return
+	}
+	player, err := model.NewPlayer(&user, req.Mode)
+	if err != nil {
+		log.Printf("[ERROR][MATCH] Failed to load game definitions: %v", err)
+		clientConn.SafeWrite(utils.Response{Type: "find_match_response", Success: false, Message: "Game data is unavailable"})
+		CleanupUser(username)
+		return
+	}
 	model.RegisterConnection(conn, player)
 
 	// Confirm queue entry

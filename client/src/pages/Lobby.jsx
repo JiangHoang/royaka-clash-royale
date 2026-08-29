@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useWebSocketContext } from "../context/WebSocketContext";
+import { hasStoredSession } from "../utils/session";
 
 export default function Lobby() {
-    const url = process.env.NODE_ENV === 'production' ? "/royaka-2025-fe/" : "/";
+    const url = import.meta.env.PROD ? "/royaka-2025-fe/" : "/";
     const navigate = useNavigate();
-    const { sendMessage, subscribe } = useWebSocketContext();
+    const { sendMessage, subscribe, logout, isAuthenticated } = useWebSocketContext();
 
     const [user, setUser] = useState({});
     const [expMax, setExpMax] = useState(100);
@@ -20,7 +21,7 @@ export default function Lobby() {
     };
 
     useEffect(() => {
-        if (!localStorage.getItem("session_id")) {
+        if (!hasStoredSession()) {
             showNotification("Session expired. Redirecting to login...");
             setTimeout(() => navigate("/auth"), 1500);
             return;
@@ -65,16 +66,10 @@ export default function Lobby() {
             }
         });
 
-        const sessionId = localStorage.getItem("session_id");
-        if (sessionId) {
-            sendMessage({
-                type: "get_user",
-                data: { session_id: sessionId },
-            });
-        }
+        if (isAuthenticated) sendMessage({ type: "get_user", data: {} });
 
         return () => unsubscribe();
-    }, [subscribe, sendMessage, navigate, selectedMode]);
+    }, [subscribe, sendMessage, navigate, selectedMode, isAuthenticated]);
 
     // === UI action handlers ===
     function findMatch() {
@@ -98,7 +93,7 @@ export default function Lobby() {
     }
 
     function handleLogout() {
-        localStorage.removeItem("session_id");
+        logout();
         navigate("/auth");
     }
 

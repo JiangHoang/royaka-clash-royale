@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -35,26 +36,40 @@ var (
 
 // ==== CONSTRUCTOR ====
 
-func NewPlayer(user *User, mode string) *Player {
+func NewPlayer(user *User, mode string) (*Player, error) {
 	if mode != "simple" && mode != "enhanced" {
-		return nil
+		return nil, errors.New("invalid game mode")
 	}
 
 	var troops []*Troop
 	var troopQueue []*Troop
 	var troopInstances []*TroopInstance
+	var err error
 
 	if mode == "simple" {
-		troops = getRandomTroops(4)
+		troops, err = getRandomTroops(4)
 	} else {
-		allTroops := getRandomTroops(8)
+		var allTroops []*Troop
+		allTroops, err = getRandomTroops(8)
+		if err != nil {
+			return nil, err
+		}
 		shuffled := shuffleTroops(allTroops)
 		troops = shuffled[:4]
 		troopQueue = shuffled[4:]
 		troopInstances = createTroopInstances(troops, user.Username)
 	}
+	if err != nil {
+		return nil, err
+	}
 
-	towers := LoadTower()
+	towers, err := LoadTower()
+	if err != nil {
+		return nil, err
+	}
+	if len(troops) == 0 || towers["King Tower"] == nil || towers["Guard Tower"] == nil {
+		return nil, errors.New("game definitions are incomplete")
+	}
 
 	player := &Player{
 		Mana: 5,
@@ -87,7 +102,7 @@ func NewPlayer(user *User, mode string) *Player {
 		Gold:           0,
 	}
 
-	return player
+	return player, nil
 }
 
 // ==== PLAYER METHODS ====

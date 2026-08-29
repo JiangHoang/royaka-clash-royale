@@ -140,7 +140,7 @@ func (g *Game) StartTurnTimer() {
 	go func(turn string) {
 
 		time.Sleep(1 * time.Second)
-		
+
 		select {
 		case <-timer.C:
 			// Chỉ xử lý timeout nếu vẫn là lượt đó
@@ -220,12 +220,11 @@ func (g *Game) CheckWinner() (*model.Player, string) {
 		g.WinnerDeclared = true
 		g.StopGameLoop()
 
+		p1Gold, p2Gold := 0, 0
 		if g.Enhanced {
-			g.Player1.User.Gold += g.Player1.Gold
-			g.Player2.User.Gold += g.Player2.Gold
+			p1Gold, p2Gold = g.Player1.Gold, g.Player2.Gold
 		}
-
-		AwardEXP(g.Player2.User, g.Player1.User, false)
+		AwardEXP(g.Player2.User, g.Player1.User, false, p2Gold, p1Gold)
 		fmt.Printf("Winner: %s\n", g.Player2.User.Username)
 		return g.Player2, g.Player2.User.Username + " wins!"
 	}
@@ -234,12 +233,11 @@ func (g *Game) CheckWinner() (*model.Player, string) {
 		g.WinnerDeclared = true
 		g.StopGameLoop()
 
+		p1Gold, p2Gold := 0, 0
 		if g.Enhanced {
-			g.Player1.User.Gold += g.Player1.Gold
-			g.Player2.User.Gold += g.Player2.Gold
+			p1Gold, p2Gold = g.Player1.Gold, g.Player2.Gold
 		}
-
-		AwardEXP(g.Player1.User, g.Player2.User, false)
+		AwardEXP(g.Player1.User, g.Player2.User, false, p1Gold, p2Gold)
 		fmt.Printf("Winner: %s\n", g.Player1.User.Username)
 		return g.Player1, g.Player1.User.Username + " wins!"
 	}
@@ -253,23 +251,20 @@ func (g *Game) CheckWinner() (*model.Player, string) {
 		g.StopGameLoop()
 
 		// Cộng gold
-		g.Player1.User.Gold += g.Player1.Gold
-		g.Player2.User.Gold += g.Player2.Gold
-
 		if p1Score < p2Score {
-			AwardEXP(g.Player1.User, g.Player2.User, false)
+			AwardEXP(g.Player1.User, g.Player2.User, false, g.Player1.Gold, g.Player2.Gold)
 			fmt.Printf("Winner by score: %s\n", g.Player1.User.Username)
 			return g.Player1, g.Player1.User.Username + " wins by score!"
 		}
 
 		if p2Score < p1Score {
-			AwardEXP(g.Player2.User, g.Player1.User, false)
+			AwardEXP(g.Player2.User, g.Player1.User, false, g.Player2.Gold, g.Player1.Gold)
 			fmt.Printf("Winner by score: %s\n", g.Player2.User.Username)
 			return g.Player2, g.Player2.User.Username + " wins by score!"
 		}
 
 		// Hòa điểm
-		AwardEXP(g.Player1.User, g.Player2.User, true)
+		AwardEXP(g.Player1.User, g.Player2.User, true, g.Player1.Gold, g.Player2.Gold)
 		fmt.Println("Game ended in a draw by score")
 		return nil, "It's a draw!"
 	}
@@ -282,28 +277,18 @@ func (g *Game) SetWinner(winner *model.Player) {
 	if winner == g.Player1 {
 		g.WinnerDeclared = true
 		g.StopGameLoop()
-		AwardEXP(g.Player1.User, g.Player2.User, false)
+		AwardEXP(g.Player1.User, g.Player2.User, false, 0, 0)
 	} else if winner == g.Player2 {
 		g.WinnerDeclared = true
 		g.StopGameLoop()
-		AwardEXP(g.Player2.User, g.Player1.User, false)
+		AwardEXP(g.Player2.User, g.Player1.User, false, 0, 0)
 	}
 }
 
-func AwardEXP(winner, loser *model.User, isDraw bool) {
-	if isDraw {
-		winner.AddExp(10)
-		loser.AddExp(10)
-	} else {
-		winner.GamesWon++
-		winner.AddExp(30)
+func AwardEXP(winner, loser *model.User, isDraw bool, winnerGold, loserGold int) {
+	if err := model.ApplyGameResult(winner, loser, isDraw, winnerGold, loserGold); err != nil {
+		log.Printf("[ERROR][GAME] Failed to atomically save game result: %v", err)
 	}
-
-	winner.GamesPlayed++
-	loser.GamesPlayed++
-
-	model.SaveUser(winner)
-	model.SaveUser(loser)
 }
 
 // ===================== Game State Broadcasting =====================

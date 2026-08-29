@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from "react-router-dom";
+import { hasStoredSession } from "../utils/session";
 
 export default function Entry() {
-    const url = process.env.NODE_ENV === 'production' ? "/royaka-2025-fe/" : "/";
+    const url = import.meta.env.PROD ? "/royaka-2025-fe/" : "/";
     const [animationComplete, setAnimationComplete] = useState(false);
     const [showTitle, setShowTitle] = useState(false);
     const [showButton, setShowButton] = useState(false);
     const navigate = useNavigate();
     const handlePlay = () => {
-         if (localStorage.getItem("session_id")) {
+         if (hasStoredSession()) {
             navigate("/lobby")
         } else {
             navigate("/auth")

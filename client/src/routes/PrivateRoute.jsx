@@ -1,9 +1,8 @@
 import { Navigate } from "react-router-dom";
+import { hasStoredSession } from "../utils/session";
 
 const PrivateRoute = ({ children }) => {
-    const sessionId = localStorage.getItem("session_id");
-
-    if (!sessionId) {
+    if (!hasStoredSession()) {
         return <Navigate to="/auth" replace />;
     }
 

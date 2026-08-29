@@ -12,9 +12,9 @@ import (
 // ==== STRUCTS ====
 
 type User struct {
+	AuthID      string    `json:"-"`
 	ID          string    `json:"id"`
 	Username    string    `json:"username"`
-	Password    string    `json:"password"` 
 	CreatedAt   time.Time `json:"createdAt"`
 	LastLogin   time.Time `json:"lastLogin"`
 	IsActive    bool      `json:"isActive"`
@@ -26,13 +26,12 @@ type User struct {
 	Gold        int       `json:"gold"`
 }
 
-func NewUser(username, password string) *User {
+func NewUser(username string) *User {
 	avatar := getRandomAvatar()
 
 	return &User{
 		ID:          generateID(),
 		Username:    username,
-		Password:    password, // Should be hashed in actual implementation
 		CreatedAt:   time.Now(),
 		LastLogin:   time.Now(),
 		IsActive:    true,

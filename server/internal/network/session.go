@@ -1,118 +1,94 @@
-// internal/network/session.go
-
 package network
 
 import (
-	"encoding/json"
-	"fmt"
-	"io"
-	"log"
-	"os"
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"time"
+
+	"royaka/internal/database"
+	"royaka/internal/model"
+
+	"github.com/jackc/pgx/v5"
 )
 
-// Session store
 type Session struct {
-	SessionID     string `json:"session_id"`
-	Username      string `json:"username"`
-	Authenticated bool   `json:"authenticated"`
+	SessionID     string    `json:"session_id"`
+	Username      string    `json:"username"`
+	Authenticated bool      `json:"authenticated"`
+	ExpiresAt     time.Time `json:"expires_at"`
 }
 
-var sessionFilePath = "assets/data/sessions.json"
+var legacySessionCutoff time.Time
 
-// ReadSessions đọc tất cả các session từ file JSON
-func ReadSessions() ([]Session, error) {
-	var sessions []Session
-	if _, err := os.Stat(sessionFilePath); os.IsNotExist(err) {
-		log.Println("[WARN][SESSION] Session file not found")
-		return sessions, nil
-	}
-
-	file, err := os.Open(sessionFilePath)
-	if err != nil {
-		log.Printf("[ERROR][SESSION] Failed to open file: %v", err)
-		return sessions, err
-	}
-	defer file.Close()
-
-	decoder := json.NewDecoder(file)
-	if err := decoder.Decode(&sessions); err != nil {
-		if err == io.EOF {
-			log.Println("[INFO][SESSION] Session file is empty")
-			return sessions, nil
-		}
-		log.Printf("[ERROR][SESSION] Failed to decode: %v", err)
-		return sessions, err
-	}
-
-	return sessions, nil
+func ConfigureLegacySessionCutoff(cutoff time.Time) {
+	legacySessionCutoff = cutoff
 }
 
-// ReadSession reads the session data from the file
-func ReadSession(sessionID string) (Session, error) {
-	sessions, err := ReadSessions()
-	if err != nil {
+func FindSessionByID(sessionID string) (Session, model.User, error) {
+	current := database.Pool().QueryRow(context.Background(), `
+		select s.session_id, p.username, true, s.expires_at,
+		       p.auth_id, p.legacy_id, p.username, p.created_at, p.last_login,
+		       p.is_active, p.exp, p.level, p.games_played, p.games_won, p.avatar, p.gold
+		from public.sessions s join public.profiles p on p.auth_id = s.profile_id
+		where s.session_id = $1 and s.expires_at > now()
+	`, sessionID)
+	if session, user, err := scanSession(current); err == nil {
+		return session, user, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return Session{}, model.User{}, err
+	}
+	legacy := database.Pool().QueryRow(context.Background(), `
+		select s.session_id, p.username, s.authenticated, s.expires_at,
+		       p.auth_id, p.legacy_id, p.username, p.created_at, p.last_login,
+		       p.is_active, p.exp, p.level, p.games_played, p.games_won, p.avatar, p.gold
+		from public.legacy_sessions s
+		join public.profiles p on p.auth_id = s.profile_id
+		where s.session_id = $1 and s.authenticated and s.expires_at > now() and $2 > now()
+	`, sessionID, legacySessionCutoff)
+	return scanSession(legacy)
+}
+
+func scanSession(row pgx.Row) (Session, model.User, error) {
+	var session Session
+	var user model.User
+	err := row.Scan(&session.SessionID, &session.Username, &session.Authenticated, &session.ExpiresAt,
+		&user.AuthID, &user.ID, &user.Username, &user.CreatedAt, &user.LastLogin,
+		&user.IsActive, &user.EXP, &user.Level, &user.GamesPlayed, &user.GamesWon,
+		&user.Avatar, &user.Gold)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Session{}, model.User{}, pgx.ErrNoRows
+	}
+	return session, user, err
+}
+
+func CreateSession(ctx context.Context, authID string) (Session, error) {
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
 		return Session{}, err
 	}
-
-	for _, s := range sessions {
-		if s.SessionID == sessionID {
-			log.Printf("[INFO][SESSION] Session found for user: %s", s.Username)
-			return s, nil
-		}
+	session := Session{
+		SessionID: base64.RawURLEncoding.EncodeToString(random), Authenticated: true,
+		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
 	}
-
-	log.Printf("[WARN][SESSION] Session ID %s not found", sessionID)
-	return Session{}, fmt.Errorf("session with ID %s not found", sessionID)
+	_, err := database.Pool().Exec(ctx, `
+		insert into public.sessions(session_id, profile_id, expires_at) values($1,$2,$3)
+	`, session.SessionID, authID, session.ExpiresAt)
+	return session, err
 }
 
-// WriteSession writes the session data to the file
-func WriteSession(sessions []Session) error {
-	// Deduplicate by username
-	latest := make(map[string]Session)
-	for _, s := range sessions {
-		latest[s.Username] = s
-	}
-	var uniqueSessions []Session
-	for _, s := range latest {
-		uniqueSessions = append(uniqueSessions, s)
-	}
-
-	file, err := os.OpenFile(sessionFilePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		log.Printf("[ERROR][SESSION] Failed to open file for writing: %v", err)
-		return err
-	}
-	defer file.Close()
-
-	if err := json.NewEncoder(file).Encode(uniqueSessions); err != nil {
-		log.Printf("[ERROR][SESSION] Failed to encode sessions: %v", err)
-		return err
-	}
-
-	return nil
+func DeleteSession(ctx context.Context, sessionID string) error {
+	_, err := database.Pool().Exec(ctx, `delete from public.sessions where session_id=$1`, sessionID)
+	return err
 }
 
-func FindSessionByID(sessionID string) (Session, error) {
-	file, err := os.Open(sessionFilePath)
-	if err != nil {
-		log.Printf("[ERROR][SESSION] Could not open file: %v", err)
-		return Session{}, err
+func CleanupExpiredSessions(ctx context.Context) error {
+	_, err := database.Pool().Exec(ctx, `
+		delete from public.legacy_sessions where expires_at <= now() or $1 <= now()
+	`, legacySessionCutoff)
+	if err == nil {
+		_, err = database.Pool().Exec(ctx, `delete from public.sessions where expires_at <= now()`)
 	}
-	defer file.Close()
-
-	var sessions []Session
-	if err := json.NewDecoder(file).Decode(&sessions); err != nil {
-		log.Printf("[ERROR][SESSION] Could not decode file: %v", err)
-		return Session{}, err
-	}
-
-	for _, s := range sessions {
-		if s.SessionID == sessionID {
-			log.Printf("[INFO][SESSION] Found user: %s", s.Username)
-			return s, nil
-		}
-	}
-
-	log.Printf("[WARN][SESSION] Session ID %s not found", sessionID)
-	return Session{}, fmt.Errorf("session not found")
+	return err
 }

@@ -1,10 +1,10 @@
 package model
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"math"
-	"os"
+	"royaka/internal/database"
 	"royaka/internal/utils"
 	"sync"
 	"time"
@@ -52,9 +52,9 @@ type TroopInstance struct {
 
 // -------- Getters --------
 
-func (t *TroopInstance) GetID() string    { return t.ID }
-func (t *TroopInstance) GetOwner() string { return t.Owner }
-func (t *TroopInstance) GetType() string  { return t.TypeEntity }
+func (t *TroopInstance) GetID() string         { return t.ID }
+func (t *TroopInstance) GetOwner() string      { return t.Owner }
+func (t *TroopInstance) GetType() string       { return t.TypeEntity }
 func (t *TroopInstance) GetPosition() Position { return t.Position }
 
 func (t *TroopInstance) IsAlive() bool {
@@ -69,19 +69,31 @@ func (p Position) String() string {
 
 // -------- Loading & Random Utils --------
 
-// Load troop templates from JSON file
+// LoadTroop loads centrally managed troop templates from Supabase Postgres.
 func LoadTroop() ([]Troop, error) {
-	file, err := os.Open("assets/data/troops.json")
+	rows, err := database.Pool().Query(context.Background(), `
+		select name, max_hp, hp, dmg, atk, def, mana, crit, exp, speed, range,
+		       type, image, description, attack_speed, aggro_priority, rarity
+		from public.troops order by name
+	`)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer rows.Close()
 
-	var templates []Troop
-	if err := json.NewDecoder(file).Decode(&templates); err != nil {
-		return nil, err
+	templates := make([]Troop, 0)
+	for rows.Next() {
+		var troop Troop
+		if err := rows.Scan(&troop.Name, &troop.MaxHP, &troop.HP, &troop.DMG,
+			&troop.ATK, &troop.DEF, &troop.MANA, &troop.CRIT, &troop.EXP,
+			&troop.Speed, &troop.Range, &troop.Type, &troop.Image,
+			&troop.Description, &troop.AttackSpeed, &troop.AggroPriority,
+			&troop.Rarity); err != nil {
+			return nil, err
+		}
+		templates = append(templates, troop)
 	}
-	return templates, nil
+	return templates, rows.Err()
 }
 
 // Shuffle troop slice securely
@@ -101,10 +113,13 @@ func shuffleTroops(troops []*Troop) []*Troop {
 }
 
 // Get random n troops, HP reset to MaxHP
-func getRandomTroops(n int) []*Troop {
+func getRandomTroops(n int) ([]*Troop, error) {
 	templates, err := LoadTroop()
 	if err != nil {
-		return nil
+		return nil, err
+	}
+	if len(templates) < n {
+		return nil, fmt.Errorf("need at least %d troop definitions, found %d", n, len(templates))
 	}
 
 	shuffled := shuffleTroops(pointerizeTroops(templates))
@@ -118,7 +133,7 @@ func getRandomTroops(n int) []*Troop {
 		t.HP = t.MaxHP    // reset HP full
 		selected[i] = &t
 	}
-	return selected
+	return selected, nil
 }
 
 // helper to convert slice of Troop structs to slice of pointers
@@ -147,8 +162,8 @@ func createTroopInstances(templates []*Troop, owner string) []*TroopInstance {
 }
 
 func (troop *TroopInstance) InAttackRange(targetPos Position) bool {
-    dx := troop.Position.X - targetPos.X
-    dy := troop.Position.Y - targetPos.Y
+	dx := troop.Position.X - targetPos.X
+	dy := troop.Position.Y - targetPos.Y
 	distance := math.Sqrt(dx*dx + dy*dy)
 
 	return distance <= troop.Template.Range

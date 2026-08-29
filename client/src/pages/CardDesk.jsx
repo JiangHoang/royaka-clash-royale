@@ -2,23 +2,25 @@ import { Crown, Diamond, Eye, Gem, Heart, Shield, Sparkles, Star, Swords, Zap } 
 import { useEffect, useState } from 'react';
 import { useNavigate } from "react-router-dom";
 import { useWebSocketContext } from "../context/WebSocketContext";
+import { hasStoredSession } from "../utils/session";
 
 const CardDesk = () => {
-    const url = process.env.NODE_ENV === 'production' ? "/royaka-2025-fe/" : "/";
+    const url = import.meta.env.PROD ? "/royaka-2025-fe/" : "/";
     const navigate = useNavigate();
-    const { sendMessage, subscribe } = useWebSocketContext();
+    const { sendMessage, subscribe, isAuthenticated } = useWebSocketContext();
 
     const [troops, setTroops] = useState([]);
     const [selectedTroop, setSelectedTroop] = useState(null);
 
     // Load troop data and assign rarity based on mana cost
     useEffect(() => {
-        if (!localStorage.getItem("session_id")) {
+        if (!hasStoredSession()) {
             setTimeout(() => navigate("/auth"), 1500);
             return;
         }
 
         // Gửi request sau khi page đã mount
+        if (!isAuthenticated) return;
         sendMessage({ type: "get_desk" });
 
         const unsubscribe = subscribe((res) => {
@@ -34,7 +36,7 @@ const CardDesk = () => {
         });
 
         return () => unsubscribe();
-    }, [navigate, subscribe, sendMessage, troops.length]);
+    }, [navigate, subscribe, sendMessage, troops.length, isAuthenticated]);
 
     const getRarityConfig = (rarity) => {
         switch (rarity) {

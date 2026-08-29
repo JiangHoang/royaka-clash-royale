@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useWebSocketContext } from "../context/WebSocketContext";
 
 export default function Auth() {
-    const url = process.env.NODE_ENV === 'production' ? "/royaka-2025-fe/" : "/";
+    const url = import.meta.env.PROD ? "/royaka-2025-fe/" : "/";
     const navigate = useNavigate();
     const { sendMessage, subscribe, isConnected } = useWebSocketContext();
     const [animationComplete, setAnimationComplete] = useState(false);
@@ -26,7 +26,6 @@ export default function Auth() {
             switch (res.type) {
                 case "login_response":
                     if (res.success) {
-                        localStorage.setItem("session_id", res.data.session_id);
                         showNotification(res.message, "success");
                         setLoading(true);
                         setTimeout(() => navigate("/lobby"), 1000);

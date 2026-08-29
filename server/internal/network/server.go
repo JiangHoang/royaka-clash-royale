@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"royaka/internal/game"
@@ -42,13 +43,14 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 			game.CleanupUser(player.User.Username)
 		}
 		game.HandleDisconnect(conn)
+		removeIdentity(conn)
 		log.Println("[WS] Connection closed")
 	}()
 
 	log.Println("[WS] WebSocket connection established")
 
 	go func() {
-		ticker := time.NewTicker(100 * time.Millisecond)
+		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
 			if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
@@ -75,8 +77,6 @@ func readAndProcessMessage(conn *websocket.Conn) bool {
 		return false
 	}
 
-	log.Printf("[INFO][WS] Raw message: %s", msg)
-
 	var pdu utils.Message
 	if err := json.Unmarshal(msg, &pdu); err != nil {
 		log.Printf("[WARN][WS] Invalid JSON: %v", err)
@@ -93,10 +93,39 @@ func processMessage(conn *websocket.Conn, pdu utils.Message) {
 	switch pdu.Type {
 	case "register":
 		handleRegister(conn, pdu.Data)
+		return
 	case "login":
 		handleLogin(conn, pdu.Data)
+		return
+	case "authenticate":
+		handleAuthenticate(conn, pdu.Data)
+		return
+	case "logout":
+		handleLogout(conn, pdu.Data)
+		return
 	case "get_user":
 		handleGetUser(conn, pdu.Data)
+		return
+	}
+
+	identity, authenticated := getIdentity(conn)
+	if !authenticated {
+		sendError(conn, "Authentication required")
+		return
+	}
+	if len(pdu.Data) > 0 {
+		var envelope struct {
+			Username string `json:"username"`
+		}
+		if json.Unmarshal(pdu.Data, &envelope) == nil && envelope.Username != "" &&
+			strings.TrimSpace(envelope.Username) != identity.Username {
+			log.Printf("[WARN][AUTH] Rejected username spoof on %s", pdu.Type)
+			sendError(conn, "Username does not match authenticated user")
+			return
+		}
+	}
+
+	switch pdu.Type {
 	case "get_desk":
 		game.HandleGetDesk(conn, pdu.Data)
 	case "find_match":

@@ -1,122 +1,158 @@
-// internal/model/store.go
-
 package model
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
-	"io/ioutil"
-	"os"
-	"path/filepath"
-	"sync"
+	"strings"
+
+	"royaka/internal/database"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 var (
-	ErrUserExists      = errors.New("user already exists")
-	ErrUserNotFound    = errors.New("user not found")
-	usersFile          = "assets/data/users.json"
-	usersStorageLock   = &sync.Mutex{}
+	ErrUserExists   = errors.New("user already exists")
+	ErrUserNotFound = errors.New("user not found")
 )
 
-// InitStorage ensures the data directory exists
-func InitStorage() error {
-	dir := filepath.Dir(usersFile)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return err
-		}
-	}
+const userColumns = `auth_id, legacy_id, username, created_at, last_login,
+ is_active, exp, level, games_played, games_won, avatar, gold`
 
-	if _, err := os.Stat(usersFile); os.IsNotExist(err) {
-		// Create the file if it doesn't exist
-		return ioutil.WriteFile(usersFile, []byte("[]"), 0644)
+func scanUser(row pgx.Row) (User, error) {
+	var user User
+	err := row.Scan(
+		&user.AuthID, &user.ID, &user.Username, &user.CreatedAt, &user.LastLogin,
+		&user.IsActive, &user.EXP, &user.Level, &user.GamesPlayed, &user.GamesWon,
+		&user.Avatar, &user.Gold,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrUserNotFound
+	}
+	return user, err
+}
+
+func FindUserByUsername(username string) (User, error) {
+	return scanUser(database.Pool().QueryRow(context.Background(), `
+		select `+userColumns+` from public.profiles where lower(username) = lower($1)
+	`, strings.TrimSpace(username)))
+}
+
+func FindCredentialsByUsername(username string) (User, string, error) {
+	var user User
+	var passwordHash string
+	err := database.Pool().QueryRow(context.Background(), `
+		select `+userColumns+`, password_hash from public.profiles
+		where lower(btrim(username)) = lower(btrim($1))
+	`, username).Scan(&user.AuthID, &user.ID, &user.Username, &user.CreatedAt, &user.LastLogin,
+		&user.IsActive, &user.EXP, &user.Level, &user.GamesPlayed, &user.GamesWon,
+		&user.Avatar, &user.Gold, &passwordHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, "", ErrUserNotFound
+	}
+	return user, passwordHash, err
+}
+
+func AddUser(user *User, passwordHash string) error {
+	err := database.Pool().QueryRow(context.Background(), `
+		insert into public.profiles
+		(legacy_id, username, password_hash, created_at, last_login, is_active,
+		 exp, level, games_played, games_won, avatar, gold)
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		returning auth_id
+	`, user.ID, strings.TrimSpace(user.Username), passwordHash, user.CreatedAt, user.LastLogin,
+		user.IsActive, user.EXP, user.Level, user.GamesPlayed, user.GamesWon, user.Avatar, user.Gold).Scan(&user.AuthID)
+	var postgresError *pgconn.PgError
+	if errors.As(err, &postgresError) && postgresError.Code == "23505" {
+		return ErrUserExists
+	}
+	return err
+}
+
+func FindUserByAuthID(authID string) (User, error) {
+	return scanUser(database.Pool().QueryRow(context.Background(), `
+		select `+userColumns+` from public.profiles where auth_id = $1
+	`, authID))
+}
+
+// SaveUser persists mutable profile fields without rewriting the password hash.
+func SaveUser(user *User) error {
+	command, err := database.Pool().Exec(context.Background(), `
+		update public.profiles set
+			last_login = $2, is_active = $3, exp = $4, level = $5,
+			games_played = $6, games_won = $7, avatar = $8, gold = $9
+		where auth_id = $1
+	`, user.AuthID, user.LastLogin, user.IsActive, user.EXP, user.Level,
+		user.GamesPlayed, user.GamesWon, user.Avatar, user.Gold)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() == 0 {
+		return ErrUserNotFound
 	}
 	return nil
 }
 
-// LoadUsers loads all users from storage
-func LoadUsers() ([]User, error) {
-	usersStorageLock.Lock()
-	defer usersStorageLock.Unlock()
-
-	if err := InitStorage(); err != nil {
-		return nil, err
-	}
-
-	file, err := os.Open(usersFile)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	var users []User
-	err = json.NewDecoder(file).Decode(&users)
-	return users, err
-}
-
-// SaveUsers persists users to storage
-func SaveUsers(users []User) error {
-	usersStorageLock.Lock()
-	defer usersStorageLock.Unlock()
-
-	data, err := json.MarshalIndent(users, "", "  ")
+// ApplyGameResult locks both profiles and applies deltas in one transaction so
+// simultaneous game completions cannot lose wins, EXP, or gold.
+func ApplyGameResult(winner, loser *User, isDraw bool, winnerGold, loserGold int) error {
+	ctx := context.Background()
+	tx, err := database.Pool().Begin(ctx)
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(usersFile, data, 0644)
-}
+	defer tx.Rollback(ctx)
 
-func SaveUser(user *User) error {
-    users, err := LoadUsers()
-    if err != nil {
-        return err
-    }
-
-    updated := false
-    for i, u := range users {
-        if u.Username == user.Username {
-            users[i] = *user
-            updated = true
-            break
-        }
-    }
-
-    if !updated {
-        users = append(users, *user)
-    }
-
-    return SaveUsers(users)
-}
-
-// AddUser adds a new user if the username is unique
-func AddUser(newUser User) error {
-	users, err := LoadUsers()
+	rows, err := tx.Query(ctx, `
+		select auth_id from public.profiles where auth_id::text = any($1::text[]) order by auth_id for update
+	`, []string{winner.AuthID, loser.AuthID})
 	if err != nil {
 		return err
 	}
+	locked := 0
+	for rows.Next() {
+		var ignored string
+		if err := rows.Scan(&ignored); err != nil {
+			rows.Close()
+			return err
+		}
+		locked++
+	}
+	rows.Close()
+	if locked != 2 {
+		return ErrUserNotFound
+	}
 
-	// Check if the username already exists
-	for _, u := range users {
-		if u.Username == newUser.Username {
-			return ErrUserExists
+	currentWinner, err := scanUser(tx.QueryRow(ctx, `select `+userColumns+` from public.profiles where auth_id=$1`, winner.AuthID))
+	if err != nil {
+		return err
+	}
+	currentLoser, err := scanUser(tx.QueryRow(ctx, `select `+userColumns+` from public.profiles where auth_id=$1`, loser.AuthID))
+	if err != nil {
+		return err
+	}
+	if isDraw {
+		currentWinner.AddExp(10)
+		currentLoser.AddExp(10)
+	} else {
+		currentWinner.GamesWon++
+		currentWinner.AddExp(30)
+	}
+	currentWinner.GamesPlayed++
+	currentLoser.GamesPlayed++
+	currentWinner.Gold += winnerGold
+	currentLoser.Gold += loserGold
+
+	for _, user := range []*User{&currentWinner, &currentLoser} {
+		if _, err := tx.Exec(ctx, `update public.profiles set exp=$2, level=$3,
+			games_played=$4, games_won=$5, gold=$6 where auth_id=$1`,
+			user.AuthID, user.EXP, user.Level, user.GamesPlayed, user.GamesWon, user.Gold); err != nil {
+			return err
 		}
 	}
-
-	users = append(users, newUser)
-	return SaveUsers(users)
-}
-
-// FindUserByUsername retrieves a user by username
-func FindUserByUsername(username string) (User, bool) {
-    users, err := LoadUsers()
-    if err != nil {
-        return User{}, false
-    }
-
-    for _, u := range users {
-        if u.Username == username {
-            return u, true
-        }
-    }
-    return User{}, false
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	*winner, *loser = currentWinner, currentLoser
+	return nil
 }
