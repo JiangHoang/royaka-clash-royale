@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { hasStoredSession } from "../utils/session";
 
 export default function Entry() {
-    const url = import.meta.env.PROD ? "/royaka-2025-fe/" : "/";
+    const url = import.meta.env.BASE_URL;
     const [animationComplete, setAnimationComplete] = useState(false);
     const [showTitle, setShowTitle] = useState(false);
     const [showButton, setShowButton] = useState(false);

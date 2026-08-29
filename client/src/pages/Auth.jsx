@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useWebSocketContext } from "../context/WebSocketContext";
 
 export default function Auth() {
-    const url = import.meta.env.PROD ? "/royaka-2025-fe/" : "/";
+    const url = import.meta.env.BASE_URL;
     const navigate = useNavigate();
     const { sendMessage, subscribe, isConnected } = useWebSocketContext();
     const [animationComplete, setAnimationComplete] = useState(false);

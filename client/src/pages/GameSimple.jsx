@@ -4,7 +4,7 @@ import { useWebSocketContext } from "../context/WebSocketContext";
 import { hasStoredSession } from "../utils/session";
 
 export default function GameSimple() {
-    const url = import.meta.env.PROD ? "/royaka-2025-fe/" : "/";
+    const url = import.meta.env.BASE_URL;
     const navigate = useNavigate();
     const { sendMessage, subscribe } = useWebSocketContext();
     const damageTimeoutRef = useRef(null);
