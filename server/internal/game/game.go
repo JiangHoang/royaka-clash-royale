@@ -5,7 +5,7 @@ import (
 	"log"
 	"math/rand"
 	"royaka/internal/model"
-	"royaka/internal/utils"
+	"royaka/internal/network/dto"
 	"sync"
 	"time"
 )
@@ -23,6 +23,7 @@ type Game struct {
 	BattleSystem    *BattleSystem
 	WinnerDeclared  bool
 	TurnTimerCancel func()
+	stopOnce        sync.Once
 }
 
 // ===================== Game Initialization =====================
@@ -124,6 +125,10 @@ func (g *Game) SkipTurn(player *model.Player) {
 }
 
 func (g *Game) StartTurnTimer() {
+	if !g.Started || g.WinnerDeclared {
+		return
+	}
+
 	// Hủy timer cũ nếu còn
 	if g.TurnTimerCancel != nil {
 		g.TurnTimerCancel()
@@ -131,10 +136,13 @@ func (g *Game) StartTurnTimer() {
 
 	timer := time.NewTimer(30 * time.Second)
 	cancelChan := make(chan struct{})
+	var cancelOnce sync.Once
 
 	g.TurnTimerCancel = func() {
-		timer.Stop()
-		close(cancelChan)
+		cancelOnce.Do(func() {
+			timer.Stop()
+			close(cancelChan)
+		})
 	}
 
 	go func(turn string) {
@@ -144,7 +152,7 @@ func (g *Game) StartTurnTimer() {
 		select {
 		case <-timer.C:
 			// Chỉ xử lý timeout nếu vẫn là lượt đó
-			if g.Turn == turn {
+			if g.Started && !g.WinnerDeclared && g.Turn == turn {
 				log.Printf("[TURN] player %s timed out", turn)
 				g.HandleTurnTimeout()
 			}
@@ -182,10 +190,14 @@ func (g *Game) startTicker() {
 }
 
 func (g *Game) StopGameLoop() {
-	if g.Started {
+	g.stopOnce.Do(func() {
 		g.Started = false
+		if g.TurnTimerCancel != nil {
+			g.TurnTimerCancel()
+			g.TurnTimerCancel = nil
+		}
 		close(g.TickerStopChan)
-	}
+	})
 }
 
 func (g *Game) UpdateMana() {
@@ -196,14 +208,7 @@ func (g *Game) UpdateMana() {
 			player.Mana++
 			player.LastManaRegen = now
 
-			sendToClient(player.User.Username, utils.Response{
-				Type:    "mana_update",
-				Success: true,
-				Message: fmt.Sprintf("Mana: %d", player.Mana),
-				Data: map[string]interface{}{
-					"player": player,
-				},
-			})
+			sendToClient(player.User.Username, dto.Push(dto.MessageManaUpdate, fmt.Sprintf("Mana: %d", player.Mana), dto.ManaUpdate{Player: dto.ToPlayer(player)}))
 		}
 	}
 }
@@ -301,19 +306,7 @@ func (g *Game) BroadcastGameState() {
 	}
 
 	for _, player := range []*model.Player{g.Player1, g.Player2} {
-		sendToClient(player.User.Username, utils.Response{
-			Type:    "game_state",
-			Success: true,
-			Message: "Game updated",
-			Data: map[string]interface{}{
-				"battleMap":     g.BattleSystem.GetEntityList(),
-				"timeLeft":      timeLeft.Milliseconds(),
-				"player1Guard1": g.Player1.Towers["guard1"].HP,
-				"player1Guard2": g.Player1.Towers["guard2"].HP,
-				"player2Guard1": g.Player2.Towers["guard1"].HP,
-				"player2Guard2": g.Player2.Towers["guard2"].HP,
-			},
-		})
+		sendToClient(player.User.Username, dto.Push(dto.MessageGameState, "Game updated", dto.GameState{BattleMap: toBattleEntities(g.BattleSystem.GetEntityList()), TimeLeft: timeLeft.Milliseconds(), Player1Guard1: g.Player1.Towers["guard1"].HP, Player1Guard2: g.Player1.Towers["guard2"].HP, Player2Guard1: g.Player2.Towers["guard1"].HP, Player2Guard2: g.Player2.Towers["guard2"].HP}))
 	}
 
 	if timeLeft == 0 && !g.WinnerDeclared {

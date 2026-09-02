@@ -5,23 +5,24 @@ import (
 	"fmt"
 	"log"
 	"royaka/internal/model"
+	"royaka/internal/network/dto"
 	"royaka/internal/utils"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-func HandleFindMatch(conn *websocket.Conn, data json.RawMessage) {
-	var req utils.FindMatchRequest
+func HandleFindMatch(conn *websocket.Conn, requestID string, data json.RawMessage) {
+	var req dto.FindMatchRequest
 
 	// Parse & validate request data
 	if err := json.Unmarshal(data, &req); err != nil || req.Username == "" || req.Mode == "" {
 		log.Printf("[WARN][MATCH] invalid request: %v", err)
-		conn.WriteJSON(utils.Response{
-			Type:    "find_match_response",
-			Success: false,
-			Message: invalidRequestMessage,
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageFindMatchResponse, requestID, "invalid_request", invalidRequestMessage))
+		return
+	}
+	if req.Mode != "simple" && req.Mode != "enhanced" {
+		writeToConnection(conn, dto.Fail(dto.MessageFindMatchResponse, requestID, "invalid_mode", "Invalid game mode"))
 		return
 	}
 
@@ -33,11 +34,7 @@ func HandleFindMatch(conn *websocket.Conn, data json.RawMessage) {
 	if pendingPlayers[username] {
 		pendingMu.Unlock()
 		log.Printf("[WARN][MATCH] user %s already in queue", username)
-		conn.WriteJSON(utils.Response{
-			Type:    "find_match_response",
-			Success: false,
-			Message: "Already in queue",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageFindMatchResponse, requestID, "already_in_queue", "Already in queue"))
 		return
 	}
 	pendingPlayers[username] = true
@@ -52,25 +49,21 @@ func HandleFindMatch(conn *websocket.Conn, data json.RawMessage) {
 	// Create Player instance and register
 	user, err := model.FindUserByUsername(req.Username)
 	if err != nil {
-		clientConn.SafeWrite(utils.Response{Type: "find_match_response", Success: false, Message: "Failed to load player profile"})
+		clientConn.SafeWrite(dto.Fail(dto.MessageFindMatchResponse, requestID, "profile_unavailable", "Failed to load player profile"))
 		CleanupUser(username)
 		return
 	}
 	player, err := model.NewPlayer(&user, req.Mode)
 	if err != nil {
 		log.Printf("[ERROR][MATCH] Failed to load game definitions: %v", err)
-		clientConn.SafeWrite(utils.Response{Type: "find_match_response", Success: false, Message: "Game data is unavailable"})
+		clientConn.SafeWrite(dto.Fail(dto.MessageFindMatchResponse, requestID, "game_data_unavailable", "Game data is unavailable"))
 		CleanupUser(username)
 		return
 	}
 	model.RegisterConnection(conn, player)
 
 	// Confirm queue entry
-	clientConn.SafeWrite(utils.Response{
-		Type:    "find_match_response",
-		Success: true,
-		Message: "Added to match queue. Waiting for opponent...",
-	})
+	clientConn.SafeWrite(dto.OK(dto.MessageFindMatchResponse, requestID, "Added to match queue. Waiting for opponent...", dto.Empty{}))
 
 	// Push player to matchmaking queue
 	go queuePlayer(player, clientConn, req.Mode, username)
@@ -88,11 +81,7 @@ func queuePlayer(player *model.Player, clientConn *ClientConnection, mode, usern
 
 	if !ok {
 		log.Printf("[WARN][MATCH] invalid mode %s for user %s", mode, username)
-		clientConn.SafeWrite(utils.Response{
-			Type:    "find_match_response",
-			Success: false,
-			Message: "Invalid game mode",
-		})
+		clientConn.SafeWrite(dto.Fail(dto.MessageFindMatchResponse, "", "invalid_mode", "Invalid game mode"))
 		return
 	}
 
@@ -114,11 +103,7 @@ func queuePlayer(player *model.Player, clientConn *ClientConnection, mode, usern
 		log.Printf("[WARN][MATCH] matchmaking timeout for user %s", username)
 		RemovePlayerFromQueue(player)
 		CleanupUser(username)
-		clientConn.SafeWrite(utils.Response{
-			Type:    "match_timeout",
-			Success: false,
-			Message: "Matchmaking timed out. No opponents found.",
-		})
+		clientConn.SafeWrite(dto.Event[dto.Empty]{Type: dto.MessageMatchTimeout, Success: false, Message: "Matchmaking timed out. No opponents found.", Error: &dto.Error{Code: "match_timeout", Message: "Matchmaking timed out. No opponents found."}})
 	}
 }
 
@@ -237,13 +222,5 @@ func handleMatch(p1, p2 *model.Player, mode string) {
 }
 
 func notifyMatchFound(conn *ClientConnection, opponent, roomID string) {
-	conn.SafeWrite(utils.Response{
-		Type:    "match_found",
-		Success: true,
-		Message: "Match found!",
-		Data: map[string]interface{}{
-			"room_id":  roomID,
-			"opponent": opponent,
-		},
-	})
+	conn.SafeWrite(dto.Push(dto.MessageMatchFound, "Match found!", dto.MatchFound{RoomID: roomID, Opponent: opponent}))
 }

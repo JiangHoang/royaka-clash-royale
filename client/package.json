@@ -8,7 +8,8 @@
     "preview": "vite preview",
     "dev": "vite --mode development",
     "product": "vite --mode production",
-    "build": "vite build"
+    "build": "vite build",
+    "check:types": "tsc --project jsconfig.json"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.7",
@@ -35,6 +36,7 @@
     "globals": "^16.0.0",
     "postcss": "^8.5.3",
     "tailwindcss": "^3.4.17",
+    "typescript": "^5.9.2",
     "vite": "^6.3.5"
   }
 }

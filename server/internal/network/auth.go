@@ -10,21 +10,15 @@ import (
 	"unicode/utf8"
 
 	"royaka/internal/model"
-	"royaka/internal/utils"
+	"royaka/internal/network/dto"
+	"royaka/internal/network/wsconn"
 
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/bcrypt"
 )
 
-type authenticateRequest struct {
-	SessionID string `json:"session_id"`
-}
-type logoutRequest struct {
-	SessionID string `json:"session_id"`
-}
-
-func writeAuthFailure(conn *websocket.Conn, responseType, message string) {
-	_ = conn.WriteJSON(utils.Response{Type: responseType, Success: false, Message: message})
+func writeAuthFailure(conn *websocket.Conn, responseType dto.MessageType, requestID, code, message string) {
+	_ = wsconn.Send(conn, dto.Fail(responseType, requestID, code, message))
 }
 
 func validUsername(username string) bool {
@@ -32,45 +26,45 @@ func validUsername(username string) bool {
 	return length >= 1 && length <= 32
 }
 
-func handleRegister(conn *websocket.Conn, data json.RawMessage) {
-	var req utils.RegisterRequest
+func handleRegister(conn *websocket.Conn, requestID string, data json.RawMessage) {
+	var req dto.RegisterRequest
 	if err := json.Unmarshal(data, &req); err != nil || !validUsername(req.Username) || len(req.Password) < 6 {
-		writeAuthFailure(conn, "register_response", "Username must be 1-32 characters and password at least 6 characters")
+		writeAuthFailure(conn, dto.MessageRegisterResponse, requestID, "invalid_registration", "Username must be 1-32 characters and password at least 6 characters")
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		writeAuthFailure(conn, "register_response", "Registration failed")
+		writeAuthFailure(conn, dto.MessageRegisterResponse, requestID, "registration_failed", "Registration failed")
 		return
 	}
 	user := model.NewUser(strings.TrimSpace(req.Username))
 	if err := model.AddUser(user, string(hash)); err != nil {
 		if errors.Is(err, model.ErrUserExists) {
-			writeAuthFailure(conn, "register_response", "Username is already registered")
+			writeAuthFailure(conn, dto.MessageRegisterResponse, requestID, "username_exists", "Username is already registered")
 		} else {
 			log.Printf("[ERROR][AUTH] Registration database error: %v", err)
-			writeAuthFailure(conn, "register_response", "Registration failed")
+			writeAuthFailure(conn, dto.MessageRegisterResponse, requestID, "registration_failed", "Registration failed")
 		}
 		return
 	}
-	_ = conn.WriteJSON(utils.Response{Type: "register_response", Success: true, Message: "Registered successfully"})
+	_ = wsconn.Send(conn, dto.OK(dto.MessageRegisterResponse, requestID, "Registered successfully", dto.Empty{}))
 }
 
-func handleLogin(conn *websocket.Conn, data json.RawMessage) {
-	var req utils.LoginRequest
+func handleLogin(conn *websocket.Conn, requestID string, data json.RawMessage) {
+	var req dto.LoginRequest
 	if err := json.Unmarshal(data, &req); err != nil || strings.TrimSpace(req.Username) == "" || req.Password == "" {
-		writeAuthFailure(conn, "login_response", "Invalid login data")
+		writeAuthFailure(conn, dto.MessageLoginResponse, requestID, "invalid_login", "Invalid login data")
 		return
 	}
 	user, passwordHash, err := model.FindCredentialsByUsername(req.Username)
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)) != nil {
-		writeAuthFailure(conn, "login_response", "Invalid credentials")
+		writeAuthFailure(conn, dto.MessageLoginResponse, requestID, "invalid_credentials", "Invalid credentials")
 		return
 	}
 	session, err := CreateSession(context.Background(), user.AuthID)
 	if err != nil {
 		log.Printf("[ERROR][AUTH] Create session failed: %v", err)
-		writeAuthFailure(conn, "login_response", "Could not create session")
+		writeAuthFailure(conn, dto.MessageLoginResponse, requestID, "session_creation_failed", "Could not create session")
 		return
 	}
 	user.LastLogin = time.Now()
@@ -78,44 +72,42 @@ func handleLogin(conn *websocket.Conn, data json.RawMessage) {
 		log.Printf("[ERROR][AUTH] Update login time failed: %v", err)
 	}
 	bindIdentity(conn, connectionIdentity{AuthID: user.AuthID, Username: user.Username})
-	_ = conn.WriteJSON(utils.Response{Type: "login_response", Success: true, Message: "Login successful", Data: map[string]any{
-		"session_id": session.SessionID, "expires_at": session.ExpiresAt.Unix(),
-	}})
+	_ = wsconn.Send(conn, dto.OK(dto.MessageLoginResponse, requestID, "Login successful", dto.Session{SessionID: session.SessionID, ExpiresAt: session.ExpiresAt.Unix()}))
 }
 
-func handleAuthenticate(conn *websocket.Conn, data json.RawMessage) {
-	var req authenticateRequest
+func handleAuthenticate(conn *websocket.Conn, requestID string, data json.RawMessage) {
+	var req dto.SessionRequest
 	if err := json.Unmarshal(data, &req); err != nil || req.SessionID == "" {
-		writeAuthFailure(conn, "authenticate_response", "Session ID is required")
+		writeAuthFailure(conn, dto.MessageAuthenticateResponse, requestID, "session_required", "Session ID is required")
 		return
 	}
 	_, user, err := FindSessionByID(req.SessionID)
 	if err != nil || !user.IsActive {
-		writeAuthFailure(conn, "authenticate_response", "Session is invalid or expired")
+		writeAuthFailure(conn, dto.MessageAuthenticateResponse, requestID, "invalid_session", "Session is invalid or expired")
 		return
 	}
 	bindIdentity(conn, connectionIdentity{AuthID: user.AuthID, Username: user.Username})
-	_ = conn.WriteJSON(utils.Response{Type: "authenticate_response", Success: true, Message: "Authenticated"})
+	_ = wsconn.Send(conn, dto.OK(dto.MessageAuthenticateResponse, requestID, "Authenticated", dto.Empty{}))
 }
 
-func handleLogout(conn *websocket.Conn, data json.RawMessage) {
-	var req logoutRequest
+func handleLogout(conn *websocket.Conn, requestID string, data json.RawMessage) {
+	var req dto.SessionRequest
 	if err := json.Unmarshal(data, &req); err != nil || req.SessionID == "" {
-		writeAuthFailure(conn, "logout_response", "Session ID is required")
+		writeAuthFailure(conn, dto.MessageLogoutResponse, requestID, "session_required", "Session ID is required")
 		return
 	}
 	if err := DeleteSession(context.Background(), req.SessionID); err != nil {
-		writeAuthFailure(conn, "logout_response", "Logout failed")
+		writeAuthFailure(conn, dto.MessageLogoutResponse, requestID, "logout_failed", "Logout failed")
 		return
 	}
 	removeIdentity(conn)
-	_ = conn.WriteJSON(utils.Response{Type: "logout_response", Success: true, Message: "Logged out"})
+	_ = wsconn.Send(conn, dto.OK(dto.MessageLogoutResponse, requestID, "Logged out", dto.Empty{}))
 }
 
-func handleGetUser(conn *websocket.Conn, data json.RawMessage) {
+func handleGetUser(conn *websocket.Conn, requestID string, data json.RawMessage) {
 	identity, ok := getIdentity(conn)
 	if !ok {
-		var req utils.UserRequest
+		var req dto.SessionRequest
 		if json.Unmarshal(data, &req) == nil && req.SessionID != "" {
 			_, user, err := FindSessionByID(req.SessionID)
 			if err == nil {
@@ -125,13 +117,13 @@ func handleGetUser(conn *websocket.Conn, data json.RawMessage) {
 		}
 	}
 	if !ok {
-		writeAuthFailure(conn, "user_response", "Authentication required")
+		writeAuthFailure(conn, dto.MessageUserResponse, requestID, "authentication_required", "Authentication required")
 		return
 	}
 	user, err := model.FindUserByAuthID(identity.AuthID)
 	if err != nil {
-		writeAuthFailure(conn, "user_response", "User not found")
+		writeAuthFailure(conn, dto.MessageUserResponse, requestID, "user_not_found", "User not found")
 		return
 	}
-	_ = conn.WriteJSON(utils.Response{Type: "user_response", Success: true, Data: map[string]any{"user": user, "maxExp": model.GetMaxExp(user.Level)}})
+	_ = wsconn.Send(conn, dto.OK(dto.MessageUserResponse, requestID, "", dto.UserData{User: dto.ToUser(&user), MaxEXP: model.GetMaxExp(user.Level)}))
 }

@@ -4,6 +4,7 @@ import (
 	"log"
 	"math"
 	"royaka/internal/model"
+	"royaka/internal/network/dto"
 	"royaka/internal/utils"
 	"runtime/debug"
 )
@@ -355,14 +356,7 @@ func (g *Game) checkWinCondition() {
 	if result == "" {
 		return
 	}
-	gameOverPayload := utils.Response{
-		Type:    "game_over_response",
-		Success: true,
-		Message: result,
-		Data: map[string]interface{}{
-			"winner": winner,
-		},
-	}
+	gameOverPayload := dto.Push(dto.MessageGameOverResponse, result, dto.GameOver{Winner: dto.ToPlayer(winner)})
 	sendToClient(g.Player1.User.Username, gameOverPayload)
 	sendToClient(g.Player2.User.Username, gameOverPayload)
 }

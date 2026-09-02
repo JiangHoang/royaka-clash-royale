@@ -3,20 +3,16 @@ package game
 import (
 	"encoding/json"
 	"log"
-	"royaka/internal/utils"
+	"royaka/internal/network/dto"
 
 	"github.com/gorilla/websocket"
 )
 
-func HandleSkipTurn(conn *websocket.Conn, data json.RawMessage) {
-	var req utils.GameRequest
+func HandleSkipTurn(conn *websocket.Conn, requestID string, data json.RawMessage) {
+	var req dto.GameRequest
 	if err := json.Unmarshal(data, &req); err != nil || req.RoomID == "" || req.Username == "" {
 		log.Printf("[WARN][SKIP_TURN] Invalid request from conn %v: %v | Data: %s", conn.RemoteAddr(), err, string(data))
-		conn.WriteJSON(utils.Response{
-			Type:    "skip_turn_response",
-			Success: false,
-			Message: "Invalid skip turn request",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageSkipTurnResponse, requestID, "invalid_request", "Invalid skip turn request"))
 		return
 	}
 
@@ -26,22 +22,18 @@ func HandleSkipTurn(conn *websocket.Conn, data json.RawMessage) {
 
 	if !exists {
 		log.Printf("[WARN][SKIP_TURN] Room not found: %s by user %s", req.RoomID, req.Username)
-		conn.WriteJSON(utils.Response{
-			Type:    "skip_turn_response",
-			Success: false,
-			Message: "Room not found",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageSkipTurnResponse, requestID, "room_not_found", "Room not found"))
+		return
+	}
+	if !room.Game.Started || room.Game.WinnerDeclared {
+		writeToConnection(conn, dto.Fail(dto.MessageSkipTurnResponse, requestID, "game_finished", "Game has already ended"))
 		return
 	}
 
 	current := room.Game.CurrentPlayer()
 	if current.User.Username != req.Username {
 		log.Printf("[WARN][SKIP_TURN] Not %s's turn in room %s", req.Username, req.RoomID)
-		conn.WriteJSON(utils.Response{
-			Type:    "skip_turn_response",
-			Success: false,
-			Message: "It's not your turn!",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageSkipTurnResponse, requestID, "not_your_turn", "It's not your turn!"))
 		return
 	}
 
@@ -49,16 +41,7 @@ func HandleSkipTurn(conn *websocket.Conn, data json.RawMessage) {
 
 	log.Printf("[DEBUG][SKIP_TURN] Turn switched to: %s", room.Game.Turn)
 
-	payload := utils.Response{
-		Type:    "skip_turn_response",
-		Success: true,
-		Message: "Turn skipped",
-		Data: map[string]interface{}{
-			"turn":    room.Game.Turn,
-			"player1": room.Game.Player1,
-			"player2": room.Game.Player2,
-		},
-	}
+	payload := dto.OK(dto.MessageSkipTurnResponse, requestID, "Turn skipped", dto.SkipTurnResult{Turn: room.Game.Turn, Player1: dto.ToPlayer(room.Game.Player1), Player2: dto.ToPlayer(room.Game.Player2)})
 
 	sendToClient(room.Player1.User.Username, payload)
 	sendToClient(room.Player2.User.Username, payload)

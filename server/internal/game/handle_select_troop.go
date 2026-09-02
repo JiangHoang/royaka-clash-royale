@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"royaka/internal/model"
-	"royaka/internal/utils"
+	"royaka/internal/network/dto"
 	"sync"
 	"time"
 
@@ -12,16 +12,12 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func HandleSelectTroop(conn *websocket.Conn, data json.RawMessage) {
-	var req utils.SelectTroopRequest
+func HandleSelectTroop(conn *websocket.Conn, requestID string, data json.RawMessage) {
+	var req dto.SelectTroopRequest
 
 	if err := json.Unmarshal(data, &req); err != nil || req.RoomID == "" || req.Username == "" || req.Troop == "" {
 		log.Printf("[ERROR][SELECT] Invalid request: %+v", req)
-		conn.WriteJSON(utils.Response{
-			Type:    "troop_response",
-			Success: false,
-			Message: "Invalid request",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageTroopResponse, requestID, "invalid_request", "Invalid request"))
 		return
 	}
 
@@ -33,11 +29,7 @@ func HandleSelectTroop(conn *websocket.Conn, data json.RawMessage) {
 	roomsMu.RUnlock()
 	if !ok {
 		log.Printf("[WARN][SELECT] Room %s not found", req.RoomID)
-		conn.WriteJSON(utils.Response{
-			Type:    "troop_response",
-			Success: false,
-			Message: "Room not found",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageTroopResponse, requestID, "room_not_found", "Room not found"))
 		return
 	}
 
@@ -48,11 +40,7 @@ func HandleSelectTroop(conn *websocket.Conn, data json.RawMessage) {
 		player = room.Player2
 	} else {
 		log.Printf("[WARN][SELECT] %s is not in the match", req.Username)
-		conn.WriteJSON(utils.Response{
-			Type:    "troop_response",
-			Success: false,
-			Message: "You are not in this match",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageTroopResponse, requestID, "player_not_in_room", "You are not in this match"))
 		return
 	}
 
@@ -66,11 +54,7 @@ func HandleSelectTroop(conn *websocket.Conn, data json.RawMessage) {
 	}
 	if selectedTemplate == nil {
 		log.Printf("[WARN][SELECT] Troop %s not found in %s's hand", req.Troop, req.Username)
-		conn.WriteJSON(utils.Response{
-			Type:    "troop_response",
-			Success: false,
-			Message: "Troop not in hand",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageTroopResponse, requestID, "invalid_troop", "Troop not in hand"))
 		return
 	}
 
@@ -85,11 +69,7 @@ func HandleSelectTroop(conn *websocket.Conn, data json.RawMessage) {
 
 	if !room.Game.IsValidSpawnPosition(req.Username, realX, realY) {
 		log.Printf("[WARN][SELECT] Invalid position (%f, %f) for %s", realX, realY, req.Username)
-		conn.WriteJSON(utils.Response{
-			Type:    "troop_response",
-			Success: false,
-			Message: "Invalid spawn position",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageTroopResponse, requestID, "invalid_spawn_position", "Invalid spawn position"))
 		return
 	}
 
@@ -97,11 +77,7 @@ func HandleSelectTroop(conn *websocket.Conn, data json.RawMessage) {
 	if room.Game.Enhanced && player.Mana < selectedTemplate.MANA {
 		log.Printf("[WARN][SELECT] Not enough mana for %s to use %s (has %d, needs %d)",
 			req.Username, selectedTemplate.Name, player.Mana, selectedTemplate.MANA)
-		conn.WriteJSON(utils.Response{
-			Type:    "troop_response",
-			Success: false,
-			Message: "Not enough mana",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageTroopResponse, requestID, "not_enough_mana", "Not enough mana"))
 		return
 	}
 
@@ -124,15 +100,7 @@ func HandleSelectTroop(conn *websocket.Conn, data json.RawMessage) {
 	room.Game.BattleSystem.AddEntity(instance)
 
 	// Gửi lại troop mới spawn cho cả 2
-	payload := utils.Response{
-		Type:    "troop_response",
-		Success: true,
-		Message: "Troop spawned",
-		Data: map[string]interface{}{
-			"player": player,
-			// "map":    room.Game.BattleSystem.BattleMap,
-		},
-	}
+	payload := dto.OK(dto.MessageTroopResponse, requestID, "Troop spawned", dto.TroopResult{Player: dto.ToPlayer(player)})
 
 	log.Printf("[INFO][SELECT] Sending troop response to %s", req.Username)
 	sendToClient(room.Player1.User.Username, payload)

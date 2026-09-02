@@ -4,22 +4,18 @@ import (
 	"encoding/json"
 	"log"
 	"royaka/internal/model"
-	"royaka/internal/utils"
+	"royaka/internal/network/dto"
 
 	"github.com/gorilla/websocket"
 )
 
-func HandleHeal(conn *websocket.Conn, data json.RawMessage) {
-	var req utils.HealRequest
+func HandleHeal(conn *websocket.Conn, requestID string, data json.RawMessage) {
+	var req dto.HealRequest
 
 	// Parse & validate request data
 	if err := json.Unmarshal(data, &req); err != nil || req.RoomID == "" || req.Username == "" || req.Troop == "" {
 		log.Printf("[WARN][HEAL] invalid request: %v", err)
-		conn.WriteJSON(utils.Response{
-			Type:    "heal_response",
-			Success: false,
-			Message: invalidRequestMessage,
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageHealResponse, requestID, "invalid_request", invalidRequestMessage))
 		return
 	}
 
@@ -29,11 +25,7 @@ func HandleHeal(conn *websocket.Conn, data json.RawMessage) {
 	roomsMu.RUnlock()
 	if !exists {
 		log.Printf("[WARN][HEAL] Room %s not found for user %s", req.RoomID, req.Username)
-		conn.WriteJSON(utils.Response{
-			Type:    "heal_response",
-			Success: false,
-			Message: roomRequestMessage,
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageHealResponse, requestID, "room_not_found", roomRequestMessage))
 		return
 	}
 
@@ -47,11 +39,7 @@ func HandleHeal(conn *websocket.Conn, data json.RawMessage) {
 		opponent = room.Player1
 	} else {
 		log.Printf("[WARN][HEAL] User %s not in room %s", req.Username, req.RoomID)
-		conn.WriteJSON(utils.Response{
-			Type:    "heal_response",
-			Success: false,
-			Message: "You are not part of this match",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageHealResponse, requestID, "player_not_in_room", "You are not part of this match"))
 		return
 	}
 
@@ -65,39 +53,19 @@ func HandleHeal(conn *websocket.Conn, data json.RawMessage) {
 	}
 	if troop == nil {
 		log.Printf("[WARN][HEAL] Troop %s not found for user %s", req.Troop, req.Username)
-		conn.WriteJSON(utils.Response{
-			Type:    "heal_response",
-			Success: false,
-			Message: "Invalid troop used for healing",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageHealResponse, requestID, "invalid_troop", "Invalid troop used for healing"))
 		return
 	}
 
 	// Call the heal method
 	actualHealed, healedTower, message := room.Game.HealTower(player, troop)
 	if actualHealed == 0 {
-		conn.WriteJSON(utils.Response{
-			Type:    "heal_response",
-			Success: false,
-			Message: message,
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageHealResponse, requestID, "heal_rejected", message))
 		return
 	}
 
 	// Prepare response payload
-	payload := utils.Response{
-		Type:    "heal_response",
-		Success: true,
-		Message: message,
-		Data: map[string]interface{}{
-			"player":      player,
-			"opponent":    opponent,
-			"troop":       troop.Name,
-			"healedTower": healedTower,
-			"healAmount":  actualHealed,
-			"turn":        room.Game.Turn,
-		},
-	}
+	payload := dto.OK(dto.MessageHealResponse, requestID, message, dto.HealResult{Player: dto.ToPlayer(player), Opponent: dto.ToPlayer(opponent), Troop: troop.Name, HealedTower: dto.ToTower(healedTower), HealAmount: actualHealed, Turn: room.Game.Turn})
 
 	// Broadcast to both players
 	sendToClient(room.Player1.User.Username, payload)

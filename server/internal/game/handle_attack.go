@@ -4,22 +4,18 @@ import (
 	"encoding/json"
 	"log"
 	"royaka/internal/model"
-	"royaka/internal/utils"
+	"royaka/internal/network/dto"
 
 	"github.com/gorilla/websocket"
 )
 
-func HandleAttack(conn *websocket.Conn, data json.RawMessage) {
-	var req utils.AttackRequest
+func HandleAttack(conn *websocket.Conn, requestID string, data json.RawMessage) {
+	var req dto.AttackRequest
 
 	// Parse & validate request data
 	if err := json.Unmarshal(data, &req); err != nil || req.RoomID == "" || req.Username == "" || req.Troop == "" || req.Target == "" {
 		log.Printf("[WARN][ATTACK] invalid request: %v", err)
-		conn.WriteJSON(utils.Response{
-			Type:    "attack_response",
-			Success: false,
-			Message: invalidRequestMessage,
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageAttackResponse, requestID, "invalid_request", invalidRequestMessage))
 		return
 	}
 
@@ -29,11 +25,7 @@ func HandleAttack(conn *websocket.Conn, data json.RawMessage) {
 	roomsMu.RUnlock()
 	if !exists {
 		log.Printf("[WARN][ATTACK] Room %s not found for user %s", req.RoomID, req.Username)
-		conn.WriteJSON(utils.Response{
-			Type:    "attack_response",
-			Success: false,
-			Message: roomRequestMessage,
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageAttackResponse, requestID, "room_not_found", roomRequestMessage))
 		return
 	}
 
@@ -47,20 +39,12 @@ func HandleAttack(conn *websocket.Conn, data json.RawMessage) {
 		defender = room.Player1
 	} else {
 		log.Printf("[WARN][ATTACK] User %s not in room %s", req.Username, req.RoomID)
-		conn.WriteJSON(utils.Response{
-			Type:    "attack_response",
-			Success: false,
-			Message: "You are not part of this match",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageAttackResponse, requestID, "player_not_in_room", "You are not part of this match"))
 		return
 	}
 
 	if room.Game.CurrentPlayer().User.Username != attacker.User.Username {
-		sendToClient(attacker.User.Username, utils.Response{
-			Type:    "attack_response",
-			Success: false,
-			Message: "It's not your turn!",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageAttackResponse, requestID, "not_your_turn", "It's not your turn!"))
 		return
 	}
 
@@ -74,11 +58,7 @@ func HandleAttack(conn *websocket.Conn, data json.RawMessage) {
 	}
 	if troop == nil {
 		log.Printf("[WARN][ATTACK] Troop %s not found for user %s", req.Troop, req.Username)
-		conn.WriteJSON(utils.Response{
-			Type:    "attack_response",
-			Success: false,
-			Message: "Invalid troop used for attack",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageAttackResponse, requestID, "invalid_troop", "Invalid troop used for attack"))
 		return
 	}
 
@@ -89,21 +69,7 @@ func HandleAttack(conn *websocket.Conn, data json.RawMessage) {
 
 	success := damage > 0 || isDestroyed
 
-	payload := utils.Response{
-		Type:    "attack_response",
-		Success: success,
-		Message: message,
-		Data: map[string]interface{}{
-			"attacker":    attacker,
-			"defender":    defender,
-			"troop":       troop.Name,
-			"target":      req.Target,
-			"damage":      int(damage),
-			"isCrit":      isCrit,
-			"isDestroyed": isDestroyed,
-			"turn":        room.Game.Turn,
-		},
-	}
+	payload := dto.Response[dto.AttackResult]{Type: dto.MessageAttackResponse, RequestID: requestID, Success: success, Message: message, Data: dto.AttackResult{Attacker: dto.ToPlayer(attacker), Defender: dto.ToPlayer(defender), Troop: troop.Name, Target: req.Target, Damage: int(damage), IsCrit: isCrit, IsDestroyed: isDestroyed, Turn: room.Game.Turn}}
 
 	sendToClient(room.Player1.User.Username, payload)
 	sendToClient(room.Player2.User.Username, payload)
@@ -113,14 +79,7 @@ func HandleAttack(conn *websocket.Conn, data json.RawMessage) {
 		if result == "" {
 			return
 		}
-		gameOverPayload := utils.Response{
-			Type:    "game_over_response",
-			Success: true,
-			Message: result,
-			Data: map[string]interface{}{
-				"winner": winner,
-			},
-		}
+		gameOverPayload := dto.Push(dto.MessageGameOverResponse, result, dto.GameOver{Winner: dto.ToPlayer(winner)})
 		sendToClient(room.Player1.User.Username, gameOverPayload)
 		sendToClient(room.Player2.User.Username, gameOverPayload)
 	}

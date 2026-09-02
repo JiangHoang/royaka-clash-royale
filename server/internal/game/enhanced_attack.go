@@ -385,23 +385,23 @@ func (g *Game) moveTowardsTarget(troop *model.TroopInstance, currentX, currentY,
 func (g *Game) moveToTowerEdge(troop *model.TroopInstance, currentX, currentY, moveSpeed float64, towerArea model.Area) (float64, float64) {
 	// Tìm điểm gần nhất trên edge của tower area mà troop có thể tấn công từ đó
 	closestPoint := g.findClosestAttackPoint(troop.Position, towerArea, troop.Template.Range)
-	
+
 	// Di chuyển về điểm đó
 	dx := closestPoint.X - currentX
 	dy := closestPoint.Y - currentY
 	dist := math.Sqrt(dx*dx + dy*dy)
-	
+
 	if dist <= moveSpeed {
 		// Đã gần đến điểm mục tiêu, di chuyển trực tiếp
 		return closestPoint.X, closestPoint.Y
 	}
-	
+
 	// Chuẩn hóa vector và di chuyển
 	if dist > 0 {
 		dx /= dist
 		dy /= dist
 	}
-	
+
 	return currentX + dx*moveSpeed, currentY + dy*moveSpeed
 }
 
@@ -410,24 +410,24 @@ func (g *Game) findClosestAttackPoint(troopPos model.Position, towerArea model.A
 	// Tìm điểm trên edge của tower area gần với troop nhất
 	centerX := (towerArea.TopLeft.X + towerArea.BottomRight.X) / 2
 	centerY := (towerArea.TopLeft.Y + towerArea.BottomRight.Y) / 2
-	
+
 	// Vector từ center tower đến troop
 	dx := troopPos.X - centerX
 	dy := troopPos.Y - centerY
 	dist := math.Sqrt(dx*dx + dy*dy)
-	
+
 	if dist == 0 {
 		// Troop đang ở chính giữa tower, chọn một hướng bất kỳ
 		return model.Position{X: towerArea.BottomRight.X + attackRange*0.8, Y: centerY}
 	}
-	
+
 	// Chuẩn hóa vector
 	dx /= dist
 	dy /= dist
-	
+
 	// Tìm điểm trên edge của rectangle gần troop nhất
 	var edgePoint model.Position
-	
+
 	// Kiểm tra 4 cạnh của rectangle
 	if dx > 0 {
 		// Troop ở bên phải tower
@@ -436,7 +436,7 @@ func (g *Game) findClosestAttackPoint(troopPos model.Position, towerArea model.A
 		// Troop ở bên trái tower
 		edgePoint.X = towerArea.TopLeft.X
 	}
-	
+
 	if dy > 0 {
 		// Troop ở phía dưới tower
 		edgePoint.Y = towerArea.BottomRight.Y
@@ -444,7 +444,7 @@ func (g *Game) findClosestAttackPoint(troopPos model.Position, towerArea model.A
 		// Troop ở phía trên tower
 		edgePoint.Y = towerArea.TopLeft.Y
 	}
-	
+
 	// Đảm bảo điểm này ở trong tầm tấn công
 	// Di chuyển ra ngoài một khoảng nhỏ để đảm bảo không đứng sát edge
 	margin := attackRange * 0.1 // 10% của tầm tấn công làm margin
@@ -453,13 +453,13 @@ func (g *Game) findClosestAttackPoint(troopPos model.Position, towerArea model.A
 	} else {
 		edgePoint.X -= margin
 	}
-	
+
 	if dy > 0 {
 		edgePoint.Y += margin
 	} else {
 		edgePoint.Y -= margin
 	}
-	
+
 	return edgePoint
 }
 

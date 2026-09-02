@@ -1,0 +1,50 @@
+package dto
+
+type RegisterRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type SessionRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type FindMatchRequest struct {
+	Username string `json:"username"`
+	Mode     string `json:"mode"`
+}
+
+type GameRequest struct {
+	RoomID   string `json:"room_id"`
+	Username string `json:"username"`
+}
+
+type AttackRequest struct {
+	RoomID   string `json:"room_id"`
+	Username string `json:"username"`
+	Troop    string `json:"troop"`
+	Target   string `json:"target"`
+}
+
+type SelectTroopRequest struct {
+	RoomID   string  `json:"room_id"`
+	Username string  `json:"username"`
+	Troop    string  `json:"troop"`
+	X        float64 `json:"x"`
+	Y        float64 `json:"y"`
+}
+
+type HealRequest struct {
+	RoomID   string `json:"room_id"`
+	Username string `json:"username"`
+	Troop    string `json:"troop"`
+}
+
+type PlayAgainRequest struct {
+	RoomID string `json:"room_id"`
+}

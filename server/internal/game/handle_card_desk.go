@@ -4,27 +4,18 @@ import (
 	"encoding/json"
 	"log"
 	"royaka/internal/model"
-	"royaka/internal/utils"
+	"royaka/internal/network/dto"
 
 	"github.com/gorilla/websocket"
 )
 
-func HandleGetDesk(conn *websocket.Conn, data json.RawMessage) {
+func HandleGetDesk(conn *websocket.Conn, requestID string, data json.RawMessage) {
 	troops, err := model.LoadTroop()
 	if err != nil {
 		log.Println("loadTroop error:", err)
-		conn.WriteJSON(utils.Response{
-			Type:    "deck_response",
-			Success: false,
-			Message: "Failed to load troops",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageDeckResponse, requestID, "deck_unavailable", "Failed to load troops"))
 		return
 	}
 
-	conn.WriteJSON(utils.Response{
-		Type:    "deck_response",
-		Success: true,
-		Message: "Troop data loaded",
-		Data:    troops,
-	})
+	writeToConnection(conn, dto.OK(dto.MessageDeckResponse, requestID, "Troop data loaded", dto.ToTroopValues(troops)))
 }

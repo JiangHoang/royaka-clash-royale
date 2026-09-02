@@ -4,21 +4,17 @@ import (
 	"encoding/json"
 	"log"
 	"royaka/internal/model"
-	"royaka/internal/utils"
+	"royaka/internal/network/dto"
 
 	"github.com/gorilla/websocket"
 )
 
-func HandlePlayAgain(conn *websocket.Conn, data json.RawMessage) {
-	var req utils.GameOverRequest
+func HandlePlayAgain(conn *websocket.Conn, requestID string, data json.RawMessage) {
+	var req dto.PlayAgainRequest
 
 	if err := json.Unmarshal(data, &req); err != nil || req.RoomID == "" {
 		log.Printf("[WARN][PLAY_AGAIN] Invalid request: %v", err)
-		conn.WriteJSON(utils.Response{
-			Type:    "play_again_response",
-			Success: false,
-			Message: invalidRequestMessage,
-		})
+		writeToConnection(conn, dto.Fail(dto.MessagePlayAgainResponse, requestID, "invalid_request", invalidRequestMessage))
 		return
 	}
 
@@ -27,16 +23,12 @@ func HandlePlayAgain(conn *websocket.Conn, data json.RawMessage) {
 	roomsMu.RUnlock()
 	if !exists {
 		log.Printf("[WARN][PLAY_AGAIN] Room %s not found", req.RoomID)
-		conn.WriteJSON(utils.Response{
-			Type:    "play_again_response",
-			Success: false,
-			Message: roomRequestMessage,
-		})
+		writeToConnection(conn, dto.Fail(dto.MessagePlayAgainResponse, requestID, "room_not_found", roomRequestMessage))
 		return
 	}
 	player := model.GetPlayerByConn(conn)
 	if player == nil || (room.Player1.User.Username != player.User.Username && room.Player2.User.Username != player.User.Username) {
-		conn.WriteJSON(utils.Response{Type: "play_again_response", Success: false, Message: "Not a member of this room"})
+		writeToConnection(conn, dto.Fail(dto.MessagePlayAgainResponse, requestID, "player_not_in_room", "Not a member of this room"))
 		return
 	}
 
@@ -45,4 +37,5 @@ func HandlePlayAgain(conn *websocket.Conn, data json.RawMessage) {
 	roomsMu.Unlock()
 
 	log.Printf("[INFO][PLAY_AGAIN] Room %s cleaned up", room.ID)
+	writeToConnection(conn, dto.OK(dto.MessagePlayAgainResponse, requestID, "Ready for matchmaking", dto.Empty{}))
 }

@@ -413,4 +413,3 @@ func (g *Game) healAlly(healer *model.TroopInstance, target *model.TroopInstance
 
 
 
-

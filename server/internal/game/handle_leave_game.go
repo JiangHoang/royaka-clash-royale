@@ -4,30 +4,24 @@ import (
 	"encoding/json"
 	"log"
 	"royaka/internal/model"
-	"royaka/internal/utils"
+	"royaka/internal/network/dto"
 
 	"github.com/gorilla/websocket"
 )
 
-func HandleLeaveGame(conn *websocket.Conn, data json.RawMessage) {
-	var req utils.GameRequest
+func HandleLeaveGame(conn *websocket.Conn, requestID string, data json.RawMessage) {
+	var req dto.GameRequest
 
 	if err := json.Unmarshal(data, &req); err != nil || req.RoomID == "" || req.Username == "" {
-		conn.WriteJSON(utils.Response{
-			Type:    "leave_game_response",
-			Success: false,
-			Message: "",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageLeaveGameResponse, requestID, "invalid_request", "Invalid request"))
 		return
 	}
 
+	roomsMu.RLock()
 	room, found := rooms[req.RoomID]
+	roomsMu.RUnlock()
 	if !found {
-		conn.WriteJSON(utils.Response{
-			Type:    "leave_game_response",
-			Success: false,
-			Message: "Room not found",
-		})
+		writeToConnection(conn, dto.Fail(dto.MessageLeaveGameResponse, requestID, "room_not_found", "Room not found"))
 		return
 	}
 
@@ -48,14 +42,7 @@ func HandleLeaveGame(conn *websocket.Conn, data json.RawMessage) {
 	if winner != nil {
 		room.Game.SetWinner(winner)
 
-		payload := utils.Response{
-			Type:    "game_over_response",
-			Success: true,
-			Message: "",
-			Data: map[string]interface{}{
-				"winner": winner,
-			},
-		}
+		payload := dto.Push(dto.MessageGameOverResponse, "", dto.GameOver{Winner: dto.ToPlayer(winner)})
 
 		sendToClient(winner.User.Username, payload)
 	}
@@ -64,11 +51,7 @@ func HandleLeaveGame(conn *websocket.Conn, data json.RawMessage) {
 		room.Game.TurnTimerCancel()
 	}
 
-	conn.WriteJSON(utils.Response{
-		Type:    "leave_game_response",
-		Success: true,
-		Message: "Left room and winner set if applicable",
-	})
+	writeToConnection(conn, dto.OK(dto.MessageLeaveGameResponse, requestID, "Left room and winner set if applicable", dto.Empty{}))
 }
 
 func HandleDisconnect(conn *websocket.Conn) {
@@ -85,12 +68,10 @@ func HandleDisconnect(conn *websocket.Conn) {
 
 	log.Printf("[INFO] %s disconnected, handling leave...", username)
 
-	req := utils.GameRequest{
+	req := dto.GameRequest{
 		RoomID:   roomID,
 		Username: username,
 	}
 	raw, _ := json.Marshal(req)
-	HandleLeaveGame(conn, raw)
+	HandleLeaveGame(conn, "", raw)
 }
-
-

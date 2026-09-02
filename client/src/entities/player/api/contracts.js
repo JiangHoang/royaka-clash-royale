@@ -1,0 +1,2 @@
+/** @typedef {{ mana: number, towers: Record<string, import('../../tower/api/contracts.js').TowerDto>, tower_instances?: import('../../battle/api/contracts.js').TowerInstanceDto[], troops: import('../../troop/api/contracts.js').TroopDto[], troop_instances?: import('../../battle/api/contracts.js').TroopInstanceDto[], active: boolean, user: import('../../user/api/contracts.js').UserDto, turn: number, gold: number }} PlayerDto */
+export {};

@@ -7,12 +7,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"royaka/internal/network/dto"
+	"royaka/internal/network/wsconn"
 	"strings"
-	"time"
 
 	"royaka/internal/game"
 	"royaka/internal/model"
-	"royaka/internal/utils"
 
 	"github.com/gorilla/websocket"
 )
@@ -47,38 +47,26 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "WebSocket upgrade failed", http.StatusInternalServerError)
 		return
 	}
+	wsconn.Register(conn)
+	wsconn.ConfigureReader(conn)
 
 	// Recover panic inside the goroutine safely
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[ERROR][WS] Panic recovered: %v", r)
 		}
-		if err := conn.Close(); err != nil {
-			log.Printf("[ERROR][WS] Connection close failed: %v", err)
-		}
 		if player := model.GetPlayerByConn(conn); player != nil {
 			game.RemovePlayerFromQueue(player)
 			game.CleanupUser(player.User.Username)
 		}
 		game.HandleDisconnect(conn)
+		model.RemoveConnection(conn)
 		removeIdentity(conn)
+		wsconn.Close(conn)
 		log.Println("[WS] Connection closed")
 	}()
 
 	log.Println("[WS] WebSocket connection established")
-
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
-				log.Printf("[ERROR][WS] Ping failed: %v", err)
-				conn.Close()
-				return
-			}
-			<-ticker.C
-		}
-	}()
 
 	for {
 
@@ -95,10 +83,15 @@ func readAndProcessMessage(conn *websocket.Conn) bool {
 		return false
 	}
 
-	var pdu utils.Message
+	var pdu dto.Envelope
 	if err := json.Unmarshal(msg, &pdu); err != nil {
 		log.Printf("[WARN][WS] Invalid JSON: %v", err)
-		sendError(conn, "Invalid message format")
+		sendError(conn, "", "invalid_message", "Invalid message format")
+		return true
+	}
+	if !pdu.Type.IsRequest() {
+		log.Printf("[WARN][WS] Unsupported request type: %s", pdu.Type)
+		sendError(conn, pdu.RequestID, "unknown_message_type", "Unknown message type")
 		return true
 	}
 
@@ -107,28 +100,28 @@ func readAndProcessMessage(conn *websocket.Conn) bool {
 	return true
 }
 
-func processMessage(conn *websocket.Conn, pdu utils.Message) {
+func processMessage(conn *websocket.Conn, pdu dto.Envelope) {
 	switch pdu.Type {
-	case "register":
-		handleRegister(conn, pdu.Data)
+	case dto.MessageRegister:
+		handleRegister(conn, pdu.RequestID, pdu.Data)
 		return
-	case "login":
-		handleLogin(conn, pdu.Data)
+	case dto.MessageLogin:
+		handleLogin(conn, pdu.RequestID, pdu.Data)
 		return
-	case "authenticate":
-		handleAuthenticate(conn, pdu.Data)
+	case dto.MessageAuthenticate:
+		handleAuthenticate(conn, pdu.RequestID, pdu.Data)
 		return
-	case "logout":
-		handleLogout(conn, pdu.Data)
+	case dto.MessageLogout:
+		handleLogout(conn, pdu.RequestID, pdu.Data)
 		return
-	case "get_user":
-		handleGetUser(conn, pdu.Data)
+	case dto.MessageGetUser:
+		handleGetUser(conn, pdu.RequestID, pdu.Data)
 		return
 	}
 
 	identity, authenticated := getIdentity(conn)
 	if !authenticated {
-		sendError(conn, "Authentication required")
+		sendError(conn, pdu.RequestID, "authentication_required", "Authentication required")
 		return
 	}
 	if len(pdu.Data) > 0 {
@@ -138,42 +131,38 @@ func processMessage(conn *websocket.Conn, pdu utils.Message) {
 		if json.Unmarshal(pdu.Data, &envelope) == nil && envelope.Username != "" &&
 			strings.TrimSpace(envelope.Username) != identity.Username {
 			log.Printf("[WARN][AUTH] Rejected username spoof on %s", pdu.Type)
-			sendError(conn, "Username does not match authenticated user")
+			sendError(conn, pdu.RequestID, "username_mismatch", "Username does not match authenticated user")
 			return
 		}
 	}
 
 	switch pdu.Type {
-	case "get_desk":
-		game.HandleGetDesk(conn, pdu.Data)
-	case "find_match":
-		game.HandleFindMatch(conn, pdu.Data)
-	case "get_game":
-		game.HandleGetGame(conn, pdu.Data)
-	case "attack":
-		game.HandleAttack(conn, pdu.Data)
-	case "heal":
-		game.HandleHeal(conn, pdu.Data)
-	case "skip_turn":
-		game.HandleSkipTurn(conn, pdu.Data)
-	case "play_again":
-		game.HandlePlayAgain(conn, pdu.Data)
-	case "leave_game":
-		game.HandleLeaveGame(conn, pdu.Data)
-	case "select_troop":
-		game.HandleSelectTroop(conn, pdu.Data)
+	case dto.MessageGetDesk:
+		game.HandleGetDesk(conn, pdu.RequestID, pdu.Data)
+	case dto.MessageFindMatch:
+		game.HandleFindMatch(conn, pdu.RequestID, pdu.Data)
+	case dto.MessageGetGame:
+		game.HandleGetGame(conn, pdu.RequestID, pdu.Data)
+	case dto.MessageAttack:
+		game.HandleAttack(conn, pdu.RequestID, pdu.Data)
+	case dto.MessageHeal:
+		game.HandleHeal(conn, pdu.RequestID, pdu.Data)
+	case dto.MessageSkipTurn:
+		game.HandleSkipTurn(conn, pdu.RequestID, pdu.Data)
+	case dto.MessagePlayAgain:
+		game.HandlePlayAgain(conn, pdu.RequestID, pdu.Data)
+	case dto.MessageLeaveGame:
+		game.HandleLeaveGame(conn, pdu.RequestID, pdu.Data)
+	case dto.MessageSelectTroop:
+		game.HandleSelectTroop(conn, pdu.RequestID, pdu.Data)
 	default:
 		log.Printf("[WARN][WS] Unknown message type: %s", pdu.Type)
-		sendError(conn, "Unknown message type")
+		sendError(conn, pdu.RequestID, "unknown_message_type", "Unknown message type")
 	}
 }
 
-func sendError(conn *websocket.Conn, message string) {
-	err := conn.WriteJSON(utils.Response{
-		Type:    "error",
-		Success: false,
-		Message: message,
-	})
+func sendError(conn *websocket.Conn, requestID, code, message string) {
+	err := wsconn.Send(conn, dto.Fail(dto.MessageError, requestID, code, message))
 	if err != nil {
 		log.Printf("[ERROR][WS] Failed to send error response: %v", err)
 	}
